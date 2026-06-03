@@ -449,6 +449,66 @@ describe('assistant-ui streaming renderer', () => {
     expect(viewport.scrollTop).toBe(420)
   })
 
+  it('does not yank the viewport up when content transiently shrinks while armed at bottom', async () => {
+    const { container } = render(<StreamingHarness />)
+
+    const content = container.querySelector('[data-slot="aui_thread-content"]') as HTMLDivElement
+    const viewport = content.parentElement as HTMLDivElement
+    let scrollHeight = 2_000
+
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 600 })
+    Object.defineProperty(viewport, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight
+    })
+
+    // Real browsers clamp scrollTop into [0, scrollHeight - clientHeight]. jsdom
+    // does not, so model the clamp here — it is the mechanism that turns a
+    // shrink-frame pin into a visible upward jump.
+    let rawTop = scrollHeight - 600
+    Object.defineProperty(viewport, 'scrollTop', {
+      configurable: true,
+      get: () => rawTop,
+      set: (value: number) => {
+        const max = Math.max(0, scrollHeight - 600)
+        rawTop = Math.max(0, Math.min(value, max))
+      }
+    })
+
+    // Park at the bottom (armed). Let the initial pin settle.
+    await wait(80)
+    await wait(0)
+    rawTop = scrollHeight - 600
+    expect(viewport.scrollTop).toBe(1_400)
+
+    // A code/patch block gets syntax-highlighted: content REPLACES laid-out DOM
+    // and `scrollHeight` is briefly smaller. The RO fires a pin on this interim
+    // shrink frame. The pin must NOT move the viewport upward.
+    scrollHeight = 1_700
+    await act(async () => {
+      for (const observer of resizeObservers) {
+        observer.trigger(1_700)
+      }
+    })
+    await wait(0)
+
+    // Pre-fix: pinToBottom wrote scrollTop = 1100 (1700 - 600), a 300px upward
+    // yank. Fixed: target (1100) is above current (1400) so the pin is a no-op;
+    // the viewport stays put through the transient shrink.
+    expect(viewport.scrollTop).toBe(1_400)
+
+    // Content regrows once highlighting lays out — the pin follows down.
+    scrollHeight = 2_080
+    await act(async () => {
+      for (const observer of resizeObservers) {
+        observer.trigger(2_080)
+      }
+    })
+    await wait(0)
+
+    expect(viewport.scrollTop).toBe(1_480)
+  })
+
   it('renders reasoning text without a leading token space', () => {
     const { container } = render(<ReasoningHarness />)
 

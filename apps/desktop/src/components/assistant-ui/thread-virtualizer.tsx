@@ -203,9 +203,36 @@ function useThreadScrollAnchor({ enabled, groupCount, scrollerRef, sessionKey, v
       return
     }
 
+    // Never move the viewport UPWARD. While armed at the bottom, a code block
+    // or patch block being syntax-highlighted (Streamdown/Shiki re-tokenizing)
+    // briefly REPLACES laid-out content, so for a frame `scrollHeight` is
+    // smaller than the steady-state height. A bare `el.scrollTop =
+    // el.scrollHeight` on that interim frame writes a *smaller* scrollTop than
+    // the current position, yanking the viewport up; the next frame the
+    // highlighted DOM lays out, content regrows, the RO/rAF pin fires again and
+    // snaps back down. The user — even at rest at the bottom reading a finished
+    // long response — sees a jump-up-then-snap-back bounce (#38221 follow-up:
+    // "jumps quickly upward then returns", reported after the disarm fixes).
+    // Pinning only when the target is below the current position keeps us
+    // following genuine growth (streaming tokens, new turns) while making
+    // transient shrink frames a no-op.
+    const target = el.scrollHeight - el.clientHeight
+
+    if (target <= el.scrollTop) {
+      // Already at/below target (shrink frame, or browser already clamped us).
+      // Keep bookkeeping current so onScroll's disarm heuristic stays accurate,
+      // but don't write scrollTop and don't burn a programmatic-pending slot —
+      // no scroll event will fire, so the counter would go stale (the same
+      // staleness that caused the wheel-up snap-back).
+      lastTopRef.current = el.scrollTop
+      lastHeightRef.current = el.scrollHeight
+
+      return
+    }
+
     // Hold the disarm gate across the scroll event the next line will fire.
     programmaticScrollPendingRef.current += 1
-    el.scrollTop = el.scrollHeight
+    el.scrollTop = target
     lastTopRef.current = el.scrollTop
     lastHeightRef.current = el.scrollHeight
   }, [scrollerRef])
